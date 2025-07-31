@@ -1,3 +1,13 @@
+import ssl
+import urllib3
+import os
+
+ssl._create_default_https_context = ssl._create_unverified_context
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -76,6 +86,7 @@ async def root():
 @app.on_event("startup")
 async def startup_event():
     logger.info("intelligent doc query system starting up")
+    logger.info("SSL verification disabled for model downloads")
 
 # shutdown event
 @app.on_event("shutdown")

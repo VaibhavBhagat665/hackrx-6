@@ -49,7 +49,7 @@ logs/
 Thumbs.db
 
 # Model files
-models/
+# models/
 embeddings/
 
 # Data

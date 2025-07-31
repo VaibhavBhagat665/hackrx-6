@@ -1,7 +1,9 @@
 import numpy as np
 from sentence_transformers import SentenceTransformer, CrossEncoder
-import pinecone
+from pinecone import Pinecone
 from typing import List, Dict, Any
+import ssl
+import urllib3
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -9,18 +11,71 @@ class EmbeddingService:
     """advanced embedding and vector search service"""
     
     def __init__(self):
-        # load models
-        self.embedding_model = SentenceTransformer(settings.embedding_model)
-        self.reranker = CrossEncoder(settings.rerank_model)
+        # load models with SSL handling
+        self.embedding_model = self._load_embedding_model()
+        self.reranker = self._load_reranker_model()
         
-        # init pinecone
-        pinecone.init(
-            api_key=settings.pinecone_api_key,
-            environment=settings.pinecone_env
-        )
-        self.index = pinecone.Index(settings.pinecone_index)
+        # init pinecone with new API
+        pc = Pinecone(api_key=settings.pinecone_api_key)
+        self.index = pc.Index(settings.pinecone_index)
         
         logger.info("embedding service initialized")
+    
+    def _load_embedding_model(self):
+        """Load embedding model with fallback strategies"""
+        models_to_try = [
+            settings.embedding_model,  # Primary model from settings
+            'all-MiniLM-L6-v2',       # Smaller, faster alternative
+            'distilbert-base-nli-stsb-mean-tokens'  # Another fallback
+        ]
+        
+        for model_name in models_to_try:
+            try:
+                logger.info(f"Attempting to load embedding model: {model_name}")
+                
+                # First try loading from cache (offline mode)
+                try:
+                    model = SentenceTransformer(model_name, local_files_only=True)
+                    logger.info(f"Successfully loaded {model_name} from cache")
+                    return model
+                except Exception as cache_error:
+                    logger.warning(f"Cache load failed for {model_name}: {cache_error}")
+                
+                # If cache fails, download with SSL bypass
+                logger.info(f"Downloading {model_name} from Hugging Face...")
+                model = SentenceTransformer(model_name)
+                logger.info(f"Successfully downloaded and loaded: {model_name}")
+                return model
+                
+            except Exception as e:
+                logger.error(f"Failed to load {model_name}: {str(e)}")
+                continue
+        
+        raise Exception("Could not load any embedding model. Check your internet connection and model names.")
+    
+    def _load_reranker_model(self):
+        """Load reranker model with fallback strategies"""
+        try:
+            logger.info(f"Attempting to load reranker model: {settings.rerank_model}")
+            
+            # First try loading from cache
+            try:
+                model = CrossEncoder(settings.rerank_model, local_files_only=True)
+                logger.info(f"Successfully loaded reranker from cache")
+                return model
+            except Exception as cache_error:
+                logger.warning(f"Reranker cache load failed: {cache_error}")
+            
+            # If cache fails, download
+            logger.info("Downloading reranker model...")
+            model = CrossEncoder(settings.rerank_model)
+            logger.info("Successfully loaded reranker model")
+            return model
+            
+        except Exception as e:
+            logger.error(f"Failed to load reranker model: {str(e)}")
+            logger.warning("Continuing without reranker - search quality may be reduced")
+            return None
     
     def create_embeddings(self, texts: List[str]) -> np.ndarray:
         """create embeddings for text list"""
@@ -91,20 +146,34 @@ class EmbeddingService:
                     'metadata': match.metadata
                 })
             
-            # rerank candidates
-            if candidates:
-                query_text_pairs = [(query, candidate['text']) for candidate in candidates]
-                rerank_scores = self.reranker.predict(query_text_pairs)
-                
-                # combine scores
-                for i, candidate in enumerate(candidates):
-                    candidate['rerank_score'] = float(rerank_scores[i])
-                    candidate['final_score'] = (
-                        0.3 * candidate['vector_score'] + 
-                        0.7 * candidate['rerank_score']
-                    )
-                
-                # sort by final score
+            # rerank candidates if reranker is available
+            if candidates and self.reranker is not None:
+                try:
+                    query_text_pairs = [(query, candidate['text']) for candidate in candidates]
+                    rerank_scores = self.reranker.predict(query_text_pairs)
+                    
+                    # combine scores
+                    for i, candidate in enumerate(candidates):
+                        candidate['rerank_score'] = float(rerank_scores[i])
+                        candidate['final_score'] = (
+                            0.3 * candidate['vector_score'] + 
+                            0.7 * candidate['rerank_score']
+                        )
+                    
+                    # sort by final score
+                    candidates.sort(key=lambda x: x['final_score'], reverse=True)
+                    
+                except Exception as rerank_error:
+                    logger.warning(f"Reranking failed, using vector scores only: {rerank_error}")
+                    # Fallback to vector scores only
+                    for candidate in candidates:
+                        candidate['final_score'] = candidate['vector_score']
+                    candidates.sort(key=lambda x: x['final_score'], reverse=True)
+            
+            elif candidates:
+                # No reranker available, use vector scores only
+                for candidate in candidates:
+                    candidate['final_score'] = candidate['vector_score']
                 candidates.sort(key=lambda x: x['final_score'], reverse=True)
             
             return candidates[:top_k]
