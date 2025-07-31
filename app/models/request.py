@@ -1,3 +1,5 @@
+import os
+from urllib.parse import urlparse
 from pydantic import BaseModel, HttpUrl, validator
 from typing import List
 
@@ -16,7 +18,11 @@ class DocumentQueryRequest(BaseModel):
     @validator('documents')
     def validate_document_url(cls, v):
         allowed_extensions = ['.pdf', '.docx']
-        if not any(str(v).lower().endswith(ext) for ext in allowed_extensions):
+        # Convert the HttpUrl object to a string before parsing
+        path = urlparse(str(v)).path
+        _, file_extension = os.path.splitext(path)
+        
+        if file_extension.lower() not in allowed_extensions:
             raise ValueError('only pdf and docx files supported')
         return v
 
