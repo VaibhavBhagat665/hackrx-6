@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sentence-transformers
+pinecone-client
+google-generativeai
+PyPDF2
+python-docx
+requests
+python-multipart
+numpy
+python-dotenv
