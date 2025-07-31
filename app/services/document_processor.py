@@ -6,6 +6,8 @@ from app.utils.document_parser import DocumentParser
 from app.utils.text_processor import TextProcessor
 from app.services.embedding_service import EmbeddingService
 from app.core.logging import logger
+import os
+from urllib.parse import urlparse
 
 class DocumentProcessor:
     """main document processing orchestrator"""
@@ -23,10 +25,14 @@ class DocumentProcessor:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
             
+            # Use urlparse to get the path and then splitext to get the extension
+            path = urlparse(url).path
+            _, file_extension = os.path.splitext(path)
+            
             # determine document type and parse
-            if url.lower().endswith('.pdf'):
+            if file_extension.lower() == '.pdf':
                 text, metadata = self.parser.parse_pdf(response.content)
-            elif url.lower().endswith('.docx'):
+            elif file_extension.lower() == '.docx':
                 text, metadata = self.parser.parse_docx(response.content)
             else:
                 raise ValueError("unsupported document format")

@@ -4,7 +4,8 @@ from pydantic import BaseModel, HttpUrl, validator
 from typing import List
 
 class DocumentQueryRequest(BaseModel):
-    documents: HttpUrl
+    # Change the type hint from HttpUrl to str
+    documents: str
     questions: List[str]
     
     @validator('questions')
@@ -18,8 +19,7 @@ class DocumentQueryRequest(BaseModel):
     @validator('documents')
     def validate_document_url(cls, v):
         allowed_extensions = ['.pdf', '.docx']
-        # Convert the HttpUrl object to a string before parsing
-        path = urlparse(str(v)).path
+        path = urlparse(v).path
         _, file_extension = os.path.splitext(path)
         
         if file_extension.lower() not in allowed_extensions:
