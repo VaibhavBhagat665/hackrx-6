@@ -1,16 +1,28 @@
+# Core FastAPI dependencies
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
+
+# LLM and Embedding dependencies
+# Install the CPU-only version of torch first
+# The version number here is an example, you can adjust it
+torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
 sentence-transformers>=2.2.2
-pinecone>=3.0.0
 google-generativeai
+
+# Document processing dependencies
 PyPDF2>=3.0.1
 python-docx>=1.1.0
 requests>=2.31.0
 python-multipart>=0.0.6
+
+# Other utilities
 numpy>=1.24.0
 python-dotenv>=1.0.0
 certifi>=2023.11.17
 urllib3>=2.1.0
 huggingface-hub[hf_xet]>=0.19.0
+
+# Vector DB
+pinecone>=3.0.0
