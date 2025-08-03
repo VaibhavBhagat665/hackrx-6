@@ -61,7 +61,7 @@ async def process_document_queries(request: DocumentQueryRequest):
             
             if confidence >= settings.confidence_threshold:
                 logger.info(f"Question {i} confidence above threshold - Using primary answer")
-                answers.append(result['answer'])
+                formatted_answer = result['answer']
             else:
                 # When fallback reranking is triggered
                 logger.info(f"Question {i} confidence below threshold - Triggering fallback with extended search (top_k={settings.max_context_chunks * 2})")
@@ -80,14 +80,33 @@ async def process_document_queries(request: DocumentQueryRequest):
                 fallback_result = llm_service.generate_answer(question, extended_context)
                 
                 logger.info(f"Fallback answer generated for question {i} - Confidence: {fallback_result.get('confidence', 'N/A')}")
-                answers.append(fallback_result['answer'])
+                formatted_answer = fallback_result['answer']
+            
+            # Log the final formatted answer for debugging
+            logger.info(f"Final formatted answer for question {i}: {formatted_answer[:100]}{'...' if len(formatted_answer) > 100 else ''}")
+            
+            answers.append(formatted_answer)
         
         # After all questions are processed, log total time
         processing_time = time.time() - start_time
         logger.info(f"All questions processed successfully - Total questions: {len(request.questions)}, Total processing time: {processing_time:.2f}s, Average time per question: {processing_time/len(request.questions):.2f}s")
         
+        # Final validation of answers format
+        validated_answers = []
+        for i, answer in enumerate(answers, 1):
+            if '\n' in answer or len(answer.strip()) == 0:
+                logger.warning(f"Answer {i} contains line breaks or is empty, applying emergency formatting")
+                clean_answer = answer.replace('\n', ' ').replace('\r', ' ').strip()
+                if not clean_answer:
+                    clean_answer = "Information not available in the provided document."
+                validated_answers.append(clean_answer)
+            else:
+                validated_answers.append(answer)
+        
+        logger.info(f"Response prepared with {len(validated_answers)} formatted answers")
+        
         return QueryResponse(
-            answers=answers,
+            answers=validated_answers,
             processing_time=processing_time,
             metadata={
                 'document_id': doc_id,

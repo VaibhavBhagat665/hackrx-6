@@ -2,13 +2,10 @@ version: '3.8'
 
 services:
   app:
-    # Use the Dockerfile located in the 'docker' folder to build the image
     build:
       context: .
       dockerfile: docker/Dockerfile
-    # Map port 8000 on your local machine to port 8000 in the container
     ports:
       - "8000:8000"
-    # Set up environment variables from your local .env file
     env_file:
       - .env

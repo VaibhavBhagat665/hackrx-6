@@ -55,3 +55,5 @@ embeddings/
 # Data
 data/
 temp/
+tests/
+cache/

@@ -5,8 +5,6 @@ pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
 # LLM and Embedding dependencies
-# Install the CPU-only version of torch first
-# The version number here is an example, you can adjust it
 torch --index-url https://download.pytorch.org/whl/cpu
 sentence-transformers>=2.2.2
 google-generativeai

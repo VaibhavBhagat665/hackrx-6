@@ -1,183 +1,183 @@
+# app/services/embedding_service.py - Updated with local storage fallback
+
 import numpy as np
-from sentence_transformers import SentenceTransformer, CrossEncoder
-from pinecone import Pinecone
-from typing import List, Dict, Any
-import ssl
-import urllib3
+from sentence_transformers import SentenceTransformer
+from typing import List, Dict, Optional
+import json
+import os
 from app.core.config import settings
 from app.core.logging import logger
 
 class EmbeddingService:
-    """advanced embedding and vector search service"""
+    """Embedding service with Pinecone or local storage fallback"""
     
     def __init__(self):
-        # load models with SSL handling
-        self.embedding_model = self._load_embedding_model()
-        self.reranker = self._load_reranker_model()
+        self.model = SentenceTransformer(settings.embedding_model)
+        self.use_pinecone = bool(settings.pinecone_api_key and settings.pinecone_env)
         
-        # init pinecone with new API
-        pc = Pinecone(api_key=settings.pinecone_api_key)
-        self.index = pc.Index(settings.pinecone_index)
-        
-        logger.info("embedding service initialized")
-    
-    def _load_embedding_model(self):
-        """Load embedding model with fallback strategies"""
-        models_to_try = [
-            settings.embedding_model,  # Primary model from settings
-            'all-MiniLM-L6-v2',       # Smaller, faster alternative
-            'distilbert-base-nli-stsb-mean-tokens'  # Another fallback
-        ]
-        
-        for model_name in models_to_try:
+        if self.use_pinecone:
             try:
-                logger.info(f"Attempting to load embedding model: {model_name}")
-                
-                # First try loading from cache (offline mode)
-                try:
-                    model = SentenceTransformer(model_name, local_files_only=True)
-                    logger.info(f"Successfully loaded {model_name} from cache")
-                    return model
-                except Exception as cache_error:
-                    logger.warning(f"Cache load failed for {model_name}: {cache_error}")
-                
-                # If cache fails, download with SSL bypass
-                logger.info(f"Downloading {model_name} from Hugging Face...")
-                model = SentenceTransformer(model_name)
-                logger.info(f"Successfully downloaded and loaded: {model_name}")
-                return model
-                
+                import pinecone
+                pinecone.init(
+                    api_key=settings.pinecone_api_key,
+                    environment=settings.pinecone_env
+                )
+                self.index = pinecone.Index(settings.pinecone_index_name)
+                logger.info("Pinecone initialized successfully")
             except Exception as e:
-                logger.error(f"Failed to load {model_name}: {str(e)}")
-                continue
-        
-        raise Exception("Could not load any embedding model. Check your internet connection and model names.")
+                logger.warning(f"Pinecone initialization failed: {e}. Using local storage.")
+                self.use_pinecone = False
+                self._init_local_storage()
+        else:
+            logger.info("Using local vector storage (Pinecone not configured)")
+            self._init_local_storage()
     
-    def _load_reranker_model(self):
-        """Load reranker model with fallback strategies"""
-        try:
-            logger.info(f"Attempting to load reranker model: {settings.rerank_model}")
-            
-            # First try loading from cache
-            try:
-                model = CrossEncoder(settings.rerank_model, local_files_only=True)
-                logger.info(f"Successfully loaded reranker from cache")
-                return model
-            except Exception as cache_error:
-                logger.warning(f"Reranker cache load failed: {cache_error}")
-            
-            # If cache fails, download
-            logger.info("Downloading reranker model...")
-            model = CrossEncoder(settings.rerank_model)
-            logger.info("Successfully loaded reranker model")
-            return model
-            
-        except Exception as e:
-            logger.error(f"Failed to load reranker model: {str(e)}")
-            logger.warning("Continuing without reranker - search quality may be reduced")
-            return None
-    
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
-        """create embeddings for text list"""
-        try:
-            embeddings = self.embedding_model.encode(
-                texts,
-                batch_size=32,
-                show_progress_bar=False,
-                convert_to_numpy=True
-            )
-            return embeddings
-        except Exception as e:
-            logger.error(f"embedding creation failed: {str(e)}")
-            raise
+    def _init_local_storage(self):
+        """Initialize local storage for vectors"""
+        self.local_storage_path = "data/vectors"
+        os.makedirs(self.local_storage_path, exist_ok=True)
+        self.vectors_cache = {}
     
     def store_document_vectors(self, doc_id: str, chunks: List[Dict]) -> bool:
-        """store document chunks as vectors"""
+        """Store document vectors using Pinecone or local storage"""
         try:
-            texts = [chunk['text'] for chunk in chunks]
-            embeddings = self.create_embeddings(texts)
-            
-            # prepare vectors for upsert
-            vectors = []
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                vector_id = f"{doc_id}_{chunk['chunk_id']}"
-                metadata = {
-                    'text': chunk['text'],
-                    'doc_id': doc_id,
-                    'chunk_id': chunk['chunk_id'],
-                    'word_count': chunk['word_count']
-                }
-                
-                vectors.append((vector_id, embedding.tolist(), metadata))
-            
-            # batch upsert
-            self.index.upsert(vectors)
-            logger.info(f"stored {len(vectors)} vectors for doc {doc_id}")
-            
-            return True
-            
+            if self.use_pinecone:
+                return self._store_pinecone(doc_id, chunks)
+            else:
+                return self._store_local(doc_id, chunks)
         except Exception as e:
-            logger.error(f"vector storage failed: {str(e)}")
+            logger.error(f"Vector storage failed: {e}")
             return False
     
-    def hybrid_search(self, query: str, doc_id: str = None, top_k: int = 10) -> List[Dict]:
-        """hybrid search with reranking"""
+    def _store_pinecone(self, doc_id: str, chunks: List[Dict]) -> bool:
+        """Store vectors in Pinecone"""
+        vectors_to_upsert = []
+        
+        for i, chunk in enumerate(chunks):
+            # Generate embedding
+            embedding = self.model.encode(chunk['text']).tolist()
+            
+            # Create vector record
+            vector_id = f"{doc_id}_{i}"
+            vector_record = {
+                'id': vector_id,
+                'values': embedding,
+                'metadata': {
+                    'doc_id': doc_id,
+                    'chunk_index': i,
+                    'text': chunk['text'][:1000],  # Limit metadata size
+                    'source_url': chunk.get('source_url', '')
+                }
+            }
+            vectors_to_upsert.append(vector_record)
+        
+        # Upsert in batches
+        batch_size = 100
+        for i in range(0, len(vectors_to_upsert), batch_size):
+            batch = vectors_to_upsert[i:i+batch_size]
+            self.index.upsert(vectors=batch)
+        
+        logger.info(f"Stored {len(vectors_to_upsert)} vectors in Pinecone for doc {doc_id}")
+        return True
+    
+    def _store_local(self, doc_id: str, chunks: List[Dict]) -> bool:
+        """Store vectors locally"""
+        doc_vectors = []
+        
+        for i, chunk in enumerate(chunks):
+            # Generate embedding
+            embedding = self.model.encode(chunk['text'])
+            
+            # Create vector record
+            vector_record = {
+                'id': f"{doc_id}_{i}",
+                'embedding': embedding.tolist(),
+                'metadata': {
+                    'doc_id': doc_id,
+                    'chunk_index': i,
+                    'text': chunk['text'],
+                    'source_url': chunk.get('source_url', '')
+                }
+            }
+            doc_vectors.append(vector_record)
+        
+        # Store in memory cache
+        self.vectors_cache[doc_id] = doc_vectors
+        
+        # Also save to disk
+        file_path = os.path.join(self.local_storage_path, f"{doc_id}.json")
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(doc_vectors, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Stored {len(doc_vectors)} vectors locally for doc {doc_id}")
+        return True
+    
+    def hybrid_search(self, query: str, doc_id: str, top_k: int = 5) -> List[Dict]:
+        """Hybrid search using Pinecone or local storage"""
         try:
-            # create query embedding
-            query_embedding = self.embedding_model.encode(query).tolist()
-            
-            # vector search
-            filter_dict = {"doc_id": doc_id} if doc_id else None
-            
-            search_results = self.index.query(
-                vector=query_embedding,
-                top_k=top_k * 2,  # get more candidates for reranking
-                include_metadata=True,
-                filter=filter_dict
-            )
-            
-            # prepare candidates for reranking
-            candidates = []
-            for match in search_results.matches:
-                candidates.append({
-                    'id': match.id,
-                    'text': match.metadata['text'],
-                    'vector_score': match.score,
-                    'metadata': match.metadata
-                })
-            
-            # rerank candidates if reranker is available
-            if candidates and self.reranker is not None:
-                try:
-                    query_text_pairs = [(query, candidate['text']) for candidate in candidates]
-                    rerank_scores = self.reranker.predict(query_text_pairs)
-                    
-                    # combine scores
-                    for i, candidate in enumerate(candidates):
-                        candidate['rerank_score'] = float(rerank_scores[i])
-                        candidate['final_score'] = (
-                            0.3 * candidate['vector_score'] + 
-                            0.7 * candidate['rerank_score']
-                        )
-                    
-                    # sort by final score
-                    candidates.sort(key=lambda x: x['final_score'], reverse=True)
-                    
-                except Exception as rerank_error:
-                    logger.warning(f"Reranking failed, using vector scores only: {rerank_error}")
-                    # Fallback to vector scores only
-                    for candidate in candidates:
-                        candidate['final_score'] = candidate['vector_score']
-                    candidates.sort(key=lambda x: x['final_score'], reverse=True)
-            
-            elif candidates:
-                # No reranker available, use vector scores only
-                for candidate in candidates:
-                    candidate['final_score'] = candidate['vector_score']
-                candidates.sort(key=lambda x: x['final_score'], reverse=True)
-            
-            return candidates[:top_k]
-            
+            if self.use_pinecone:
+                return self._search_pinecone(query, doc_id, top_k)
+            else:
+                return self._search_local(query, doc_id, top_k)
         except Exception as e:
-            logger.error(f"search failed: {str(e)}")
+            logger.error(f"Search failed: {e}")
             return []
+    
+    def _search_pinecone(self, query: str, doc_id: str, top_k: int) -> List[Dict]:
+        """Search using Pinecone"""
+        # Generate query embedding
+        query_embedding = self.model.encode(query).tolist()
+        
+        # Search in Pinecone
+        results = self.index.query(
+            vector=query_embedding,
+            top_k=top_k,
+            filter={"doc_id": {"$eq": doc_id}},
+            include_metadata=True
+        )
+        
+        # Format results
+        formatted_results = []
+        for match in results['matches']:
+            formatted_results.append({
+                'text': match['metadata']['text'],
+                'score': match['score'],
+                'chunk_index': match['metadata']['chunk_index']
+            })
+        
+        return formatted_results
+    
+    def _search_local(self, query: str, doc_id: str, top_k: int) -> List[Dict]:
+        """Search using local storage"""
+        # Get document vectors
+        doc_vectors = self.vectors_cache.get(doc_id)
+        if not doc_vectors:
+            # Try loading from disk
+            file_path = os.path.join(self.local_storage_path, f"{doc_id}.json")
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    doc_vectors = json.load(f)
+                self.vectors_cache[doc_id] = doc_vectors
+            else:
+                logger.warning(f"No vectors found for document {doc_id}")
+                return []
+        
+        # Generate query embedding
+        query_embedding = self.model.encode(query)
+        
+        # Calculate similarities
+        similarities = []
+        for vector_record in doc_vectors:
+            chunk_embedding = np.array(vector_record['embedding'])
+            similarity = np.dot(query_embedding, chunk_embedding) / (
+                np.linalg.norm(query_embedding) * np.linalg.norm(chunk_embedding)
+            )
+            similarities.append({
+                'text': vector_record['metadata']['text'],
+                'score': float(similarity),
+                'chunk_index': vector_record['metadata']['chunk_index']
+            })
+        
+        # Sort by similarity and return top_k
+        similarities.sort(key=lambda x: x['score'], reverse=True)
+        return similarities[:top_k]
