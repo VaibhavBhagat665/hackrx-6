@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.db
+.env
+.git/
+.gitignore
+.idea/
+*.ipynb
+*.zip
+*.tar
+*.gz
+node_modules/
+data/
+models/
