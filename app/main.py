@@ -15,7 +15,7 @@ import time
 import uvicorn
 from app.core.config import settings
 from app.core.logging import logger
-from app.api.endpoints import router
+from app.api.endpoints import router, process_document_queries  # Import the specific endpoint
 from app.models.response import ErrorResponse
 
 # create app instance
@@ -70,8 +70,11 @@ async def general_exception_handler(request: Request, exc: Exception):
         ).dict()
     )
 
-# include routers
+# include routers with prefix (keeps existing API structure)
 app.include_router(router, prefix="/api/v1")
+
+# Add direct hackathon endpoint without prefix for compatibility
+app.post("/hackrx/run")(process_document_queries)
 
 # root endpoint
 @app.get("/")

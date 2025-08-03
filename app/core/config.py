@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
-        case_sensitive = True
+        case_sensitive = False  # Changed from True to False
+        # Add explicit field mapping if needed
+        fields = {
+            'gemini_api_key': {'env': ['GEMINI_API_KEY', 'gemini_api_key']},
+            'pinecone_api_key': {'env': ['PINECONE_API_KEY', 'pinecone_api_key']},
+            'pinecone_env': {'env': ['PINECONE_ENV', 'pinecone_env']},
+        }
 
 settings = Settings()
