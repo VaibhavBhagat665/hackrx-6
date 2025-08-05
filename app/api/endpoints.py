@@ -1,7 +1,10 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 import time
 import traceback
-from typing import Dict, Any
+import asyncio
+import concurrent.futures
+import threading
+from typing import Dict, Any, List
 from app.models.request import DocumentQueryRequest, WebhookRequest
 from app.models.response import QueryResponse, WebhookResponse, HealthResponse
 from app.services.document_processor import DocumentProcessor
@@ -12,151 +15,284 @@ from app.core.logging import logger
 
 router = APIRouter()
 
-# initialize services
-doc_processor = DocumentProcessor()
-embedding_service = EmbeddingService()
-llm_service = LLMService()
+# Initialize services as singletons for thread safety
+_doc_processor = None
+_embedding_service = None
+_llm_service = None
+_services_lock = threading.Lock()
 
-@router.post("/hackrx/run", response_model=QueryResponse)
-async def process_document_queries(request: DocumentQueryRequest):
-    """main hackathon endpoint"""
-    start_time = time.time()
+def get_services():
+    """Thread-safe service initialization"""
+    global _doc_processor, _embedding_service, _llm_service
     
+    with _services_lock:
+        if _doc_processor is None:
+            _doc_processor = DocumentProcessor()
+            _embedding_service = EmbeddingService()
+            _llm_service = LLMService()
+            logger.info("Services initialized successfully")
+    
+    return _doc_processor, _embedding_service, _llm_service
+
+def process_single_question_optimized(question: str, doc_id: str, question_num: int) -> str:
+    """
+    Ultra-optimized single question processing for maximum speed
+    
+    Args:
+        question: The question to process
+        doc_id: Document ID for context retrieval
+        question_num: Question number for logging
+        
+    Returns:
+        Formatted answer string
+    """
     try:
-        # Log when request is received
-        logger.info(f"Request received for /hackrx/run endpoint - Document URL: {request.documents}, Questions count: {len(request.questions)}")
+        start_time = time.time()
+        logger.info(f"Processing Q{question_num}: {question[:40]}...")
         
-        # Before document processing
-        logger.info(f"Starting document processing from URL: {request.documents}")
-        doc_id, chunks = await doc_processor.process_document_from_url(str(request.documents))
+        # Get services (thread-safe)
+        _, embedding_service, llm_service = get_services()
         
-        # After document processing
-        logger.info(f"Document processing completed - Document ID: {doc_id}, Chunks created: {len(chunks)}")
-        
-        answers = []
-        
-        for i, question in enumerate(request.questions, 1):
-            logger.info(f"Processing question {i}/{len(request.questions)}: {question}")
-            
-            # Before embedding search
-            logger.info(f"Starting hybrid search for question {i} with top_k={settings.max_context_chunks}")
-            search_results = embedding_service.hybrid_search(
-                query=question,
-                doc_id=doc_id,
-                top_k=settings.max_context_chunks
-            )
-            
-            # After getting search results
-            logger.info(f"Hybrid search completed for question {i} - Retrieved {len(search_results)} results")
-            
-            context_chunks = [result['text'] for result in search_results]
-            
-            # Before LLM generation
-            logger.info(f"Calling LLM service for question {i} with {len(context_chunks)} context chunks")
-            result = llm_service.generate_answer(question, context_chunks)
-            
-            # After getting LLM result and checking confidence
-            confidence = result['confidence']
-            logger.info(f"LLM response generated for question {i} - Confidence: {confidence:.3f}, Threshold: {settings.confidence_threshold}")
-            
-            if confidence >= settings.confidence_threshold:
-                logger.info(f"Question {i} confidence above threshold - Using primary answer")
-                formatted_answer = result['answer']
-            else:
-                # When fallback reranking is triggered
-                logger.info(f"Question {i} confidence below threshold - Triggering fallback with extended search (top_k={settings.max_context_chunks * 2})")
-                
-                extended_results = embedding_service.hybrid_search(
-                    query=question,
-                    doc_id=doc_id,
-                    top_k=settings.max_context_chunks * 2
-                )
-                
-                logger.info(f"Extended search completed for question {i} - Retrieved {len(extended_results)} results")
-                
-                extended_context = [r['text'] for r in extended_results]
-                
-                logger.info(f"Calling LLM service for fallback answer on question {i} with {len(extended_context)} context chunks")
-                fallback_result = llm_service.generate_answer(question, extended_context)
-                
-                logger.info(f"Fallback answer generated for question {i} - Confidence: {fallback_result.get('confidence', 'N/A')}")
-                formatted_answer = fallback_result['answer']
-            
-            # Log the final formatted answer for debugging
-            logger.info(f"Final formatted answer for question {i}: {formatted_answer[:100]}{'...' if len(formatted_answer) > 100 else ''}")
-            
-            answers.append(formatted_answer)
-        
-        # After all questions are processed, log total time
-        processing_time = time.time() - start_time
-        logger.info(f"All questions processed successfully - Total questions: {len(request.questions)}, Total processing time: {processing_time:.2f}s, Average time per question: {processing_time/len(request.questions):.2f}s")
-        
-        # Final validation of answers format
-        validated_answers = []
-        for i, answer in enumerate(answers, 1):
-            if '\n' in answer or len(answer.strip()) == 0:
-                logger.warning(f"Answer {i} contains line breaks or is empty, applying emergency formatting")
-                clean_answer = answer.replace('\n', ' ').replace('\r', ' ').strip()
-                if not clean_answer:
-                    clean_answer = "Information not available in the provided document."
-                validated_answers.append(clean_answer)
-            else:
-                validated_answers.append(answer)
-        
-        logger.info(f"Response prepared with {len(validated_answers)} formatted answers")
-        
-        return QueryResponse(
-            answers=validated_answers,
-            processing_time=processing_time,
-            metadata={
-                'document_id': doc_id,
-                'chunks_processed': len(chunks),
-                'questions_count': len(request.questions)
-            }
+        # Get relevant context chunks with reduced top_k for speed
+        search_start = time.time()
+        search_results = embedding_service.hybrid_search(
+            query=question,
+            doc_id=doc_id,
+            top_k=2  # Reduced from 3 to 2 for faster processing
         )
+        search_time = time.time() - search_start
+        
+        logger.info(f"Q{question_num}: Retrieved {len(search_results)} chunks in {search_time:.2f}s")
+        
+        context_chunks = [result['text'] for result in search_results]
+        
+        # Generate answer using optimized LLM service
+        llm_start = time.time()
+        answer = llm_service.generate_answer(question, context_chunks)
+        llm_time = time.time() - llm_start
+        
+        total_time = time.time() - start_time
+        logger.info(f"Q{question_num}: Completed in {total_time:.2f}s (search: {search_time:.2f}s, llm: {llm_time:.2f}s)")
+        
+        return answer
         
     except Exception as e:
-        # In the except block, include traceback.print_exc()
-        logger.error(f"Exception in /hackrx/run endpoint: {str(e)}")
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"processing failed: {str(e)}"
-        )
+        logger.error(f"Error processing Q{question_num}: {str(e)}")
+        return "Unable to process this question due to an error."
 
+@router.post("/hackrx/run")
+async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
+    """Ultra-optimized hackathon endpoint for sub-30 second processing"""
+    overall_start_time = time.time()
+    
+    try:
+        logger.info(f"🚀 ULTRA-FAST REQUEST - Document: {request.documents}, Questions: {len(request.questions)}")
+        
+        # Get services (initialize if needed)
+        doc_processor, embedding_service, llm_service = get_services()
+        
+        # Phase 1: Document processing (sequential - required)
+        doc_start_time = time.time()
+        logger.info("📄 Starting document processing...")
+        
+        doc_id, chunks = await doc_processor.process_document_from_url(str(request.documents))
+        
+        doc_processing_time = time.time() - doc_start_time
+        logger.info(f"📄 Document processed in {doc_processing_time:.2f}s - ID: {doc_id}, Chunks: {len(chunks)}")
+        
+        # Check time remaining
+        elapsed_time = time.time() - overall_start_time
+        remaining_time = 28.0 - elapsed_time  # 2-second buffer
+        
+        if remaining_time <= 2.0:
+            logger.warning(f"⚠️ Insufficient time remaining: {remaining_time:.1f}s")
+            return {
+                "answers": ["Document processing took too long"] * len(request.questions)
+            }
+        
+        # Phase 2: Ultra-parallel question processing
+        questions_start_time = time.time()
+        logger.info(f"⚡ Starting ULTRA-PARALLEL processing of {len(request.questions)} questions with {remaining_time:.1f}s remaining")
+        
+        # Determine optimal number of workers
+        max_workers = min(len(request.questions), 12)  # Increased for maximum parallelism
+        
+        # Use ThreadPoolExecutor for true parallelism
+        loop = asyncio.get_event_loop()
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            logger.info(f"🔥 Launching {max_workers} parallel workers")
+            
+            # Submit all questions immediately
+            futures = []
+            submission_start = time.time()
+            
+            for i, question in enumerate(request.questions, 1):
+                future = loop.run_in_executor(
+                    executor, 
+                    process_single_question_optimized, 
+                    question, 
+                    doc_id, 
+                    i
+                )
+                futures.append(future)
+            
+            submission_time = time.time() - submission_start
+            logger.info(f"🚀 All {len(futures)} questions submitted in {submission_time:.3f}s")
+            
+            # Wait for completion with aggressive timeout
+            try:
+                timeout = max(remaining_time - 2.0, 8.0)  # Minimum 8 seconds, but respect remaining time
+                logger.info(f"⏱️ Waiting for completion with {timeout:.1f}s timeout")
+                
+                completion_start = time.time()
+                answers = await asyncio.wait_for(
+                    asyncio.gather(*futures, return_exceptions=True),
+                    timeout=timeout
+                )
+                completion_time = time.time() - completion_start
+                
+                logger.info(f"✅ All questions completed in {completion_time:.2f}s")
+                
+            except asyncio.TimeoutError:
+                logger.error("❌ TIMEOUT: Question processing exceeded time limit")
+                
+                # Cancel remaining futures
+                cancelled_count = 0
+                for future in futures:
+                    if future.cancel():
+                        cancelled_count += 1
+                
+                logger.warning(f"⚠️ Cancelled {cancelled_count} remaining tasks")
+                
+                # Return timeout message for all questions
+                return {
+                    "answers": ["Processing timed out - please try again"] * len(request.questions)
+                }
+        
+        # Phase 3: Process and validate results
+        validation_start = time.time()
+        processed_answers = []
+        
+        for i, answer in enumerate(answers):
+            if isinstance(answer, Exception):
+                logger.error(f"❌ Q{i+1} failed: {str(answer)}")
+                processed_answers.append("Unable to process this question due to an error.")
+            else:
+                # Quick validation and cleaning
+                clean_answer = str(answer).replace('\n', ' ').replace('\r', ' ').strip()
+                if not clean_answer or clean_answer.isspace():
+                    clean_answer = "Information not available in the provided document."
+                processed_answers.append(clean_answer)
+        
+        validation_time = time.time() - validation_start
+        questions_processing_time = time.time() - questions_start_time
+        total_processing_time = time.time() - overall_start_time
+        
+        # Final logging
+        logger.info(f"🎯 PERFORMANCE SUMMARY:")
+        logger.info(f"   📄 Document processing: {doc_processing_time:.2f}s")
+        logger.info(f"   ⚡ Questions processing: {questions_processing_time:.2f}s")
+        logger.info(f"   ✅ Validation: {validation_time:.3f}s")
+        logger.info(f"   🏁 TOTAL: {total_processing_time:.2f}s")
+        
+        # Success/failure check
+        if total_processing_time <= 30.0:
+            logger.info(f"🏆 SUCCESS: Completed in {total_processing_time:.2f}s (under 30s limit)")
+        else:
+            logger.warning(f"⚠️ OVER LIMIT: Took {total_processing_time:.2f}s (exceeded 30s)")
+        
+        # Return optimized response
+        return {"answers": processed_answers}
+        
+    except Exception as e:
+        processing_time = time.time() - overall_start_time
+        logger.error(f"💥 CRITICAL ERROR after {processing_time:.2f}s: {str(e)}")
+        traceback.print_exc()
+        
+        # Return error response
+        return {
+            "answers": ["Critical system error occurred"] * len(request.questions)
+        }
 
 @router.post("/webhook", response_model=WebhookResponse)
 async def webhook_handler(request: WebhookRequest, bg_tasks: BackgroundTasks):
-    """webhook endpoint for external integrations"""
+    """Webhook endpoint for external integrations"""
     
     try:
-        # log webhook event
+        # Log webhook event
         bg_tasks.add_task(log_webhook_event, request.dict())
-        
-        logger.info(f"webhook received: {request.event_type}")
+        logger.info(f"Webhook received: {request.event_type}")
         
         return WebhookResponse(
             status="success",
-            message="webhook processed successfully"
+            message="Webhook processed successfully"
         )
         
     except Exception as e:
-        logger.error(f"webhook processing failed: {str(e)}")
+        logger.error(f"Webhook processing failed: {str(e)}")
         raise HTTPException(
             status_code=400,
-            detail=f"webhook failed: {str(e)}"
+            detail=f"Webhook failed: {str(e)}"
         )
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
-    """health check endpoint"""
+    """Health check endpoint with service status"""
     
-    return HealthResponse(
-        status="healthy",
-        service="intelligent doc query system",
-        version=settings.api_version
-    )
+    try:
+        # Quick service check
+        _, embedding_service, llm_service = get_services()
+        
+        # Test embedding service
+        test_embeddings = embedding_service.get_embeddings(["health check"])
+        embedding_healthy = len(test_embeddings) > 0 and len(test_embeddings[0]) > 0
+        
+        status = "healthy" if embedding_healthy else "degraded"
+        
+        return HealthResponse(
+            status=status,
+            service="Ultra-Fast Document Query System",
+            version=settings.api_version
+        )
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return HealthResponse(
+            status="unhealthy",
+            service="Ultra-Fast Document Query System",
+            version=settings.api_version
+        )
 
 async def log_webhook_event(webhook_data: Dict[str, Any]):
-    """background task for webhook logging"""
-    logger.info(f"webhook logged: {webhook_data}")
+    """Background task for webhook logging"""
+    logger.info(f"Webhook logged: {webhook_data}")
+
+# Pre-warm endpoint for testing
+@router.post("/prewarm")
+async def prewarm_services():
+    """Endpoint to pre-warm services"""
+    try:
+        start_time = time.time()
+        
+        # Initialize services
+        doc_processor, embedding_service, llm_service = get_services()
+        
+        # Test operations
+        test_embeddings = embedding_service.get_embeddings(["test warmup"])
+        test_answer = llm_service.generate_answer("What is this?", ["This is a test."])
+        
+        warmup_time = time.time() - start_time
+        
+        return {
+            "status": "success",
+            "warmup_time": round(warmup_time, 2),
+            "message": "Services pre-warmed successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Pre-warm failed: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Pre-warm failed: {str(e)}"
+        }
