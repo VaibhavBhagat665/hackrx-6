@@ -13,9 +13,9 @@ class Settings(BaseSettings):
     
     max_file_size: int = 100 * 1024 * 1024 
     allowed_extensions: list = [".pdf", ".docx", ".txt"]
-    chunk_size: int = 300  # Reduced from 1000 for faster processing
-    chunk_overlap: int = 30  # Reduced from 200 for faster processing
-    max_context_chunks: int = 3  # Reduced from 5 for faster processing
+    chunk_size: int = 300
+    chunk_overlap: int = 30
+    max_context_chunks: int = 5
     
     # LLM Configuration - Updated for OpenRouter + Mistral
     llm_provider: str = "openrouter"
@@ -23,16 +23,23 @@ class Settings(BaseSettings):
     openrouter_model: str = "mistralai/codestral-2508"
     openrouter_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
     
+    # New Groq Configuration
+    groq_api_key: Optional[str] = None
+    groq_model: Optional[str] = None
+    groq_base_url: Optional[str] = None
+    groq_retry_attempts: Optional[int] = 2
+    groq_retry_delay: Optional[float] = 1.0
+
     # Legacy Gemini configuration (kept for backward compatibility, can be removed)
     gemini_api_key: Optional[str] = None
     gemini_model: Optional[str] = "gemini-pro"
     
     # LLM Parameters
     confidence_threshold: float = 0.7
-    max_tokens: int = 1000
+    max_tokens: int = 512
     temperature: float = 0.3
     top_p: float = 0.9
-    request_timeout: int = 60  # Timeout for LLM API calls
+    request_timeout: int = 60
     
     # Embedding Configuration
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -64,7 +71,7 @@ class Settings(BaseSettings):
     cors_headers: list = ["*"]
     
     # Performance Configuration
-    api_request_timeout: int = 300  # General API timeout
+    api_request_timeout: int = 300
     batch_size: int = 100
     max_concurrent_requests: int = 10
     
@@ -73,12 +80,16 @@ class Settings(BaseSettings):
     webhook_timeout: int = 30
     
     # OpenRouter Specific Configuration
-    openrouter_http_referer: str = "https://your-domain.com"  # Optional: for analytics
-    openrouter_x_title: str = "Document Query System"  # Optional: for analytics
+    openrouter_http_referer: str = "https://your-domain.com"
+    openrouter_x_title: str = "Document Query System"
     
     # Development Settings
     debug: bool = False
     reload: bool = False
+
+    # New fields to resolve the error
+    max_pages_per_document: int = 100
+    processing_timeout_per_page: float = 0.5
     
     class Config:
         env_file = ".env"

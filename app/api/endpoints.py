@@ -53,12 +53,12 @@ def process_single_question_optimized(question: str, doc_id: str, question_num: 
         # Get services (thread-safe)
         _, embedding_service, llm_service = get_services()
         
-        # Get relevant context chunks with reduced top_k for speed
+        # Get relevant context chunks with a higher top_k for better accuracy
         search_start = time.time()
         search_results = embedding_service.hybrid_search(
             query=question,
             doc_id=doc_id,
-            top_k=2  # Reduced from 3 to 2 for faster processing
+            top_k=settings.max_context_chunks  # Use configured value (now 5)
         )
         search_time = time.time() - search_start
         
@@ -115,7 +115,7 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
         logger.info(f"⚡ Starting ULTRA-PARALLEL processing of {len(request.questions)} questions with {remaining_time:.1f}s remaining")
         
         # Determine optimal number of workers
-        max_workers = min(len(request.questions), 12)  # Increased for maximum parallelism
+        max_workers = min(len(request.questions), settings.max_concurrent_requests)  # Use configured value
         
         # Use ThreadPoolExecutor for true parallelism
         loop = asyncio.get_event_loop()
@@ -140,9 +140,9 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
             submission_time = time.time() - submission_start
             logger.info(f"🚀 All {len(futures)} questions submitted in {submission_time:.3f}s")
             
-            # Wait for completion with aggressive timeout
+            # Wait for completion with a more lenient timeout
             try:
-                timeout = max(remaining_time - 2.0, 8.0)  # Minimum 8 seconds, but respect remaining time
+                timeout = max(remaining_time - 2.0, 15.0)  # Increased minimum timeout for better answers
                 logger.info(f"⏱️ Waiting for completion with {timeout:.1f}s timeout")
                 
                 completion_start = time.time()

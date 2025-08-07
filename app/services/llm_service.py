@@ -18,16 +18,14 @@ class LLMService:
         self.api_key = self.config["api_key"]
         self.model = self.config["model"]
         self.base_url = self.config["base_url"]
-        self.timeout = 20  # Aggressive timeout for speed
+        self.timeout = 25
         self.http_referer = self.config["http_referer"]
         self.x_title = self.config["x_title"]
         
-        # Verify API key is configured
         if not self.api_key:
             logger.error("OpenRouter API key not configured")
             raise ValueError("OpenRouter API key is required")
         
-        # Thread-local storage for HTTP clients (for thread safety)
         self._local = threading.local()
         
         logger.info(f"LLM service initialized with model: {self.model}")
@@ -37,8 +35,8 @@ class LLMService:
         """Get thread-local HTTP client for thread safety"""
         if not hasattr(self._local, 'client'):
             self._local.client = httpx.Client(
-                timeout=httpx.Timeout(15.0),  # Reduced timeout
-                verify=False,  # Disable SSL verification for Cloud Run
+                timeout=httpx.Timeout(20.0),
+                verify=False,
                 limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -62,16 +60,9 @@ class LLMService:
             Formatted single-line answer string
         """
         try:
-            # Prepare context from chunks with aggressive truncation
             context = self._format_context_ultra_fast(context_chunks)
-            
-            # Create optimized prompt for maximum speed
             prompt = self._create_ultra_fast_prompt(query, context)
-            
-            # Call OpenRouter API with aggressive optimizations
             response = self._call_openrouter_api_fast(prompt)
-            
-            # Format the answer for HackRx requirements
             formatted_answer = self.format_answer_ultra_fast(response)
             
             logger.info(f"Generated answer for query: {query[:30]}...")
@@ -79,36 +70,25 @@ class LLMService:
             
         except Exception as e:
             logger.error(f"LLM generation failed: {str(e)}")
-            # Return immediate fallback
             return "Information not available in the provided document."
     
     def _call_openrouter_api_fast(self, prompt: str) -> str:
         """
         Ultra-fast API call to OpenRouter with minimal retries
-        
-        Args:
-            prompt: The formatted prompt to send
-            
-        Returns:
-            The response text from the model
         """
-        # Ultra-optimized payload for maximum speed
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,  # Minimum for fastest, most deterministic responses
-            "max_tokens": 80,    # Reduced for speed
-            "top_p": 0.9,
+            "temperature": settings.temperature,
+            "max_tokens": settings.max_tokens, # Use configured max_tokens
+            "top_p": settings.top_p,
             "stream": False
         }
         
-        # Single attempt with aggressive timeout
         try:
             client = self._get_http_client()
-            
             logger.info("Making ultra-fast API call to OpenRouter")
             start_time = time.time()
-            
             response = client.post(
                 self.base_url,
                 json=payload
@@ -147,44 +127,30 @@ class LLMService:
     def format_answer_ultra_fast(self, raw_answer: str) -> str:
         """
         Ultra-fast answer formatting optimized for maximum speed
-        
-        Args:
-            raw_answer: Raw answer from the model
-            
-        Returns:
-            Single-line formatted answer
         """
         if not raw_answer or not raw_answer.strip():
             return "No relevant information found in the document."
         
-        # Minimal cleanup for speed
         formatted = raw_answer.strip()
         
-        # Single-pass cleanup with compiled regex for speed
-        formatted = re.sub(r'[\n\r]+', ' ', formatted)  # Replace line breaks
-        formatted = re.sub(r'\s+', ' ', formatted)      # Normalize spaces
-        formatted = re.sub(r'[*#`]+', '', formatted)    # Remove markdown
+        formatted = re.sub(r'[\n\r]+', ' ', formatted)
+        formatted = re.sub(r'\s+', ' ', formatted)
+        formatted = re.sub(r'[*#`]+', '', formatted)
         formatted = formatted.strip()
         
-        # Remove wrapping quotes quickly
         if len(formatted) >= 2 and formatted[0] == '"' and formatted[-1] == '"':
             formatted = formatted[1:-1].strip()
         
-        # Quick prefix removal
         if formatted.lower().startswith(('answer:', 'the answer is:', 'based on')):
             colon_pos = formatted.find(':')
             if colon_pos != -1:
                 formatted = formatted[colon_pos + 1:].strip()
         
-        # Ensure proper ending
         if formatted and not formatted[-1] in '.!?':
             formatted += '.'
         
-        # Quick truncation if too long
-        if len(formatted) > 200:
-            formatted = formatted[:197] + '...'
+        # No hardcoded truncation
         
-        # Final validation
         if not formatted or formatted.isspace():
             return "Information not available in the provided document."
         
@@ -193,25 +159,17 @@ class LLMService:
     def _format_context_ultra_fast(self, chunks: List[str]) -> str:
         """
         Ultra-fast context formatting for maximum speed
-        
-        Args:
-            chunks: List of document chunks
-            
-        Returns:
-            Formatted context string
         """
         if not chunks:
             return "[NO CONTEXT]"
         
-        # Take only top 2 chunks for speed, limit total size aggressively
         context_parts = []
         total_chars = 0
-        max_context_chars = 1500  # Reduced for faster processing
+        max_context_chars = 8000
         
-        for i, chunk in enumerate(chunks[:2], 1):  # Only top 2 for maximum speed
+        for i, chunk in enumerate(chunks[:settings.max_context_chunks], 1):
             clean_chunk = chunk.strip()
             if clean_chunk and total_chars + len(clean_chunk) < max_context_chars:
-                # Simple format for speed
                 context_parts.append(f"[{i}] {clean_chunk}")
                 total_chars += len(clean_chunk)
             else:
@@ -222,20 +180,18 @@ class LLMService:
     def _create_ultra_fast_prompt(self, query: str, context: str) -> str:
         """
         Create ultra-optimized prompt for maximum speed
-        
-        Args:
-            query: User's question
-            context: Formatted context chunks
-            
-        Returns:
-            Ultra-optimized prompt for the model
         """
-        # Minimal prompt for fastest processing
-        prompt = f"""Context: {context}
+        prompt = f"""You are an AI assistant designed to answer questions based *only* on the provided context.
+If the context does not contain the information needed to answer the question, state that the information is not available in the document.
+
+Context:
+---
+{context}
+---
 
 Question: {query}
 
-Answer directly in one sentence:"""
+Provide a complete, professional, and comprehensive answer based solely on the context. Do not use external knowledge."""
         
         return prompt
     
