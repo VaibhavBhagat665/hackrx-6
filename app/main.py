@@ -241,7 +241,7 @@ async def process_document_queries(request: DocumentQueryRequest):
         if total_processing_time > 30.0:
             logger.warning(f"Processing took {total_processing_time:.2f}s - exceeded 30s limit")
         else:
-            logger.info(f"✅ Processing completed within time limit: {total_processing_time:.2f}s")
+            logger.info(f"Processing completed within time limit: {total_processing_time:.2f}s")
         
         # Return simple JSON response
         return {"answers": processed_answers}

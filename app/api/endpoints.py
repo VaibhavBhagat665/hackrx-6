@@ -86,33 +86,33 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
     overall_start_time = time.time()
     
     try:
-        logger.info(f"🚀 ULTRA-FAST REQUEST - Document: {request.documents}, Questions: {len(request.questions)}")
+        logger.info(f"ULTRA-FAST REQUEST - Document: {request.documents}, Questions: {len(request.questions)}")
         
         # Get services (initialize if needed)
         doc_processor, embedding_service, llm_service = get_services()
         
         # Phase 1: Document processing (sequential - required)
         doc_start_time = time.time()
-        logger.info("📄 Starting document processing...")
+        logger.info("Starting document processing...")
         
         doc_id, chunks = await doc_processor.process_document_from_url(str(request.documents))
         
         doc_processing_time = time.time() - doc_start_time
-        logger.info(f"📄 Document processed in {doc_processing_time:.2f}s - ID: {doc_id}, Chunks: {len(chunks)}")
+        logger.info(f"Document processed in {doc_processing_time:.2f}s - ID: {doc_id}, Chunks: {len(chunks)}")
         
         # Check time remaining
         elapsed_time = time.time() - overall_start_time
-        remaining_time = 28.0 - elapsed_time  # 2-second buffer
+        remaining_time = 60.0 - elapsed_time  # 2-second buffer
         
         if remaining_time <= 2.0:
-            logger.warning(f"⚠️ Insufficient time remaining: {remaining_time:.1f}s")
+            logger.warning(f"Insufficient time remaining: {remaining_time:.1f}s")
             return {
                 "answers": ["Document processing took too long"] * len(request.questions)
             }
         
         # Phase 2: Ultra-parallel question processing
         questions_start_time = time.time()
-        logger.info(f"⚡ Starting ULTRA-PARALLEL processing of {len(request.questions)} questions with {remaining_time:.1f}s remaining")
+        logger.info(f"Starting ULTRA-PARALLEL processing of {len(request.questions)} questions with {remaining_time:.1f}s remaining")
         
         # Determine optimal number of workers
         max_workers = min(len(request.questions), settings.max_concurrent_requests)  # Use configured value
@@ -121,7 +121,7 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
         loop = asyncio.get_event_loop()
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            logger.info(f"🔥 Launching {max_workers} parallel workers")
+            logger.info(f"Launching {max_workers} parallel workers")
             
             # Submit all questions immediately
             futures = []
@@ -138,12 +138,12 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
                 futures.append(future)
             
             submission_time = time.time() - submission_start
-            logger.info(f"🚀 All {len(futures)} questions submitted in {submission_time:.3f}s")
+            logger.info(f"All {len(futures)} questions submitted in {submission_time:.3f}s")
             
             # Wait for completion with a more lenient timeout
             try:
                 timeout = max(remaining_time - 2.0, 15.0)  # Increased minimum timeout for better answers
-                logger.info(f"⏱️ Waiting for completion with {timeout:.1f}s timeout")
+                logger.info(f"Waiting for completion with {timeout:.1f}s timeout")
                 
                 completion_start = time.time()
                 answers = await asyncio.wait_for(
@@ -152,10 +152,10 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
                 )
                 completion_time = time.time() - completion_start
                 
-                logger.info(f"✅ All questions completed in {completion_time:.2f}s")
+                logger.info(f"All questions completed in {completion_time:.2f}s")
                 
             except asyncio.TimeoutError:
-                logger.error("❌ TIMEOUT: Question processing exceeded time limit")
+                logger.error("TIMEOUT: Question processing exceeded time limit")
                 
                 # Cancel remaining futures
                 cancelled_count = 0
@@ -163,7 +163,7 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
                     if future.cancel():
                         cancelled_count += 1
                 
-                logger.warning(f"⚠️ Cancelled {cancelled_count} remaining tasks")
+                logger.warning(f"Cancelled {cancelled_count} remaining tasks")
                 
                 # Return timeout message for all questions
                 return {
@@ -176,7 +176,7 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
         
         for i, answer in enumerate(answers):
             if isinstance(answer, Exception):
-                logger.error(f"❌ Q{i+1} failed: {str(answer)}")
+                logger.error(f"Q{i+1} failed: {str(answer)}")
                 processed_answers.append("Unable to process this question due to an error.")
             else:
                 # Quick validation and cleaning
@@ -190,24 +190,24 @@ async def process_document_queries_ultra_fast(request: DocumentQueryRequest):
         total_processing_time = time.time() - overall_start_time
         
         # Final logging
-        logger.info(f"🎯 PERFORMANCE SUMMARY:")
-        logger.info(f"   📄 Document processing: {doc_processing_time:.2f}s")
-        logger.info(f"   ⚡ Questions processing: {questions_processing_time:.2f}s")
-        logger.info(f"   ✅ Validation: {validation_time:.3f}s")
-        logger.info(f"   🏁 TOTAL: {total_processing_time:.2f}s")
+        logger.info(f"PERFORMANCE SUMMARY:")
+        logger.info(f"   Document processing: {doc_processing_time:.2f}s")
+        logger.info(f"   Questions processing: {questions_processing_time:.2f}s")
+        logger.info(f"   Validation: {validation_time:.3f}s")
+        logger.info(f"   TOTAL: {total_processing_time:.2f}s")
         
         # Success/failure check
         if total_processing_time <= 30.0:
-            logger.info(f"🏆 SUCCESS: Completed in {total_processing_time:.2f}s (under 30s limit)")
+            logger.info(f"SUCCESS: Completed in {total_processing_time:.2f}s (under 30s limit)")
         else:
-            logger.warning(f"⚠️ OVER LIMIT: Took {total_processing_time:.2f}s (exceeded 30s)")
+            logger.warning(f"OVER LIMIT: Took {total_processing_time:.2f}s (exceeded 30s)")
         
         # Return optimized response
         return {"answers": processed_answers}
         
     except Exception as e:
         processing_time = time.time() - overall_start_time
-        logger.error(f"💥 CRITICAL ERROR after {processing_time:.2f}s: {str(e)}")
+        logger.error(f"CRITICAL ERROR after {processing_time:.2f}s: {str(e)}")
         traceback.print_exc()
         
         # Return error response
