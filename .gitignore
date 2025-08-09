@@ -57,9 +57,6 @@ data/
 temp/
 tests/
 cache/
-.dockerignore
-dockerignore
-Dockerfile
 *__pycache__
 .yml
 
