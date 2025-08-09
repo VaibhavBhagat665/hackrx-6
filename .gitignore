@@ -59,4 +59,7 @@ tests/
 cache/
 *__pycache__
 .yml
-
+.dockerignore
+cloudbuild.yaml
+doc_cache/
+*_cache/

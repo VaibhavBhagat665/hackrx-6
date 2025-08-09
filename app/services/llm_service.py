@@ -322,7 +322,7 @@ HELPFUL ANSWER (always provide a complete response):"""
         }
         
         headers = {
-            "Authorization": "Bearer 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",
+            "Authorization": "Bearer ",
             "Content-Type": "application/json"
         }
         
